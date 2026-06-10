@@ -252,19 +252,39 @@ Total Score = mean of all environment scores
 |------|------|--------|---------|-----------|-------|
 | 1 | SDK Setup & Basic Agent Loop | COMPLETE | 2026-06-07 | 2026-06-07 | arc-agi 0.9.8, GameRunner, ExplorerAgent, RHAE scoring |
 | 2 | Frame Parsing & State Representation | COMPLETE | 2026-06-07 | 2026-06-07 | FrameParser: objects, diffs, movement tracking. Tested on 10 games |
-| 3 | Advanced Graph Explorer | IN PROGRESS | 2026-06-09 | — | FrugalExplorer v1: effect model, frozen mask, frontier BFS, death attribution. Local harness built (5s/sweep). 0.143% local vs 0.236% old explorer — 3 failure modes diagnosed, see runs/ |
-| 4 | CNN Online Learning | IN PROGRESS | 2026-06-09 | — | Adopted official StochasticGoose CNN notebook (kernel v6). GPU=T4, internet off. Submitted to leaderboard |
-| 5 | Hybrid Integration | NOT STARTED | — | — | Combine explorer + CNN |
-| 6 | Scoring Meta-Strategy | NOT STARTED | — | — | Budget management, L0-only fallback |
+| 3 | Advanced Graph Explorer | IN PROGRESS | 2026-06-09 | — | FrugalExplorer v2: effect model, frozen mask, frontier BFS w/ drift cooldown, death attribution, per-color segmentation, tiered click probing. 0.111% local (seeded/reproducible), 4 L0s solving — efficiency is the bottleneck now |
+| 4 | CNN Online Learning | ABANDONED | 2026-06-09 | 2026-06-10 | Kernel v6 scored **0.05%** — worse than naive explorer (0.08%). Confirms research: CNN burns 200-300 actions/level learning, blows the 5x cutoff. Pivoted to training-free effect model |
+| 5 | Hybrid Integration | RESCOPED | — | — | New scope: explorer + effect model (done in Step 3); CNN dropped |
+| 6 | Scoring Meta-Strategy | NOT STARTED | — | — | Budget management, exploit-on-first-success, efficiency tuning |
 | 7 | Multi-Game Tuning | NOT STARTED | — | — | Per-game profiling and tuning |
-| 8 | Kaggle Submission | IN PROGRESS | 2026-06-07 | — | v3 explorer: 0.08% RHAE, rank ~800. v6 StochasticGoose CNN submitted, awaiting score. Milestone #1: June 30 |
-| 9 | Polish & Portfolio | NOT STARTED | — | — | |
+| 8 | Kaggle Submission | IN PROGRESS | 2026-06-07 | — | Best: 0.08% (v3 explorer, rank ~800). v6 CNN: 0.05%. Next submission: FrugalExplorer once local > 0.3%. Milestone #1: June 30 |
+| 9 | Polish & Portfolio | IN PROGRESS | 2026-06-09 | — | GitHub repo live (private): github.com/shloksah/arc-agi-3-agent with README. Flip public + add MIT-0 license before June 30 for milestone eligibility |
 
-**Overall:** 2/9 steps complete | **Current:** 0.08% RHAE (CNN score pending) | **Target:** 10%+ RHAE
+**Overall:** 2/9 steps complete | **Current:** 0.08% Kaggle / 0.111% local | **Target:** 0.65%+ (top 5)
 
 ---
 
-## Current Submission (kernel v6)
+## Development Log
+
+### 2026-06-10
+- **v6 CNN scored 0.05%** — worse than the v3 explorer (0.08%). CNN path confirmed dead; Step 4 closed.
+- Git history rewritten to sole authorship (Shlok Sah); commit routine updated.
+
+### 2026-06-09 (architecture pivot day)
+- Researched live leaderboard via Kaggle CLI + analyzed 4 top public notebooks (code in `/tmp/arc3-research/`): top = 1.21%, top-5 ≈ 0.65%, best public notebooks 0.35-0.46%. Engine-introspection BFS identified as DQ risk; frugal Go-Explore explorer identified as the legitimate meta.
+- **Built `harness.py`**: 25-game local RHAE sweep (~50s, seeded, reproducible), results tracked in `runs/`.
+- **Fixed `compute_rhae`**: official weighting (all levels in denominator) + 5x cutoff.
+- **GameRunner death-continuation**: GAME_OVER → death attribution → RESET → play on (was terminal; bp35 used to die at action 16).
+- **Built FrugalExplorer** (`core/frugal_explorer.py` + `core/effect_model.py`): frozen border-band UI mask hashing, component-snapped clicks with tiered expansion, training-free effect model with exploration bonus, frontier BFS (return-then-explore) with drift cooldown, death attribution.
+- **Found root-cause parser bug**: bg-vs-rest segmentation merged boards into one giant component, hiding embedded interactive elements (lp85: 600 clicks, 0 changes). Fixed with per-color connected components → lp85 L0 solves within cutoff.
+- **Local scores**: random 0.000% / old explorer 0.236% (2 lucky solves, high variance) / FrugalExplorer 0.111% deterministic with 4 L0s solving (lp85 in-cutoff; lf52/tn36/vc33 past 5x = zero credit).
+- **Key insight**: solving is no longer the bottleneck — action efficiency is. Getting the 3 zeroed solves under the cutoff ≈ triples local score; near 2x baseline ≈ 0.5%+ (top-5 range).
+- **Diagnosed, parked**: m0r0 = genuinely large state space (mirror-matching game, not a hash bug); r11l = click tunnel-vision (every click changes pixels, none progress).
+- **Next**: exploit-on-first-success (concentrate on same-color/region candidates once a click works), cross-level candidate pruning via effect model, then submit when local > 0.3%.
+
+---
+
+## Final CNN Submission (kernel v6 — closed at 0.05%)
 
 - **Notebook:** `submission.ipynb` — adapted from official StochasticGoose sample (`kaggle.com/code/inversion/arc3-sample-submission-stochastic-goose`)
 - **Config:** T4 GPU enabled, internet disabled, competition data source linked
