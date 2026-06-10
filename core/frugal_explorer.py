@@ -94,6 +94,14 @@ class FrugalExplorer:
     # ── state hashing with frozen UI mask ───────────────────────────────
 
     def _hash(self, frame: np.ndarray) -> str:
+        # arcengine's RenderableUserDisplay template draws a step counter
+        # down column 0 and level pips on row 1. Those pixels tick every few
+        # actions regardless of play — too slowly for volatility detection —
+        # and otherwise make identical play states hash differently (state
+        # explosion, broken cycle detection). Always exclude them.
+        frame = frame.copy()
+        frame[:, 0] = VOLATILE_SENTINEL
+        frame[0:2, :] = VOLATILE_SENTINEL
         if self.mask is not None:
             frame = np.where(self.mask, VOLATILE_SENTINEL, frame)
         return hashlib.md5(frame.tobytes()).hexdigest()[:12]
