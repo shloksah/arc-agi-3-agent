@@ -35,7 +35,7 @@ from core.game_runner import Transition
 
 MASK_FREEZE_AFTER = 5     # transitions observed before the UI mask freezes
 VOLATILE_THRESHOLD = 0.8  # pixel changes in >= this fraction of steps -> UI
-MAX_CLICKS_PER_NODE = 32
+MAX_CLICKS_PER_NODE = 64
 VOLATILE_SENTINEL = 16    # colors are 0-15; masked pixels hash as 16
 MAX_TIER = 3
 
@@ -127,11 +127,17 @@ class FrugalExplorer:
         if t.action == GameAction.RESET:
             return
         self._observe_for_mask(t)
-        self.effect.update(self._last_key, t.frame_before, t.frame_changed)
+        # Learn from NOVELTY, not pixel change: in many games every click
+        # repaints something (selection toggles, cursors), so "changed the
+        # frame" carries no information. "Reached a state we had not seen
+        # before" separates progress from churn, and no-ops are never novel.
+        result_hash = self._hash(t.frame_after)
+        novel = t.frame_changed and result_hash not in self.nodes
+        self.effect.update(self._last_key, t.frame_before, novel)
         node = self.nodes.get(self._last_hash)
         if node is not None:
             node.tested[self._last_key] = t.frame_changed
-            node.edges[self._last_key] = self._hash(t.frame_after)
+            node.edges[self._last_key] = result_hash
         if self._last_key == 7 and not t.frame_changed:
             self._undo_useless = True
 

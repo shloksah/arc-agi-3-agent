@@ -30,6 +30,7 @@ class EffectModel:
         self.adv_colors = set()    # clicked colors that ever advanced a level
         self.deadly_simple = {}    # action -> death count (soft, cross-level)
         self.deadly_color = {}     # clicked color -> death count
+        self.focus_color = None    # a color with proven novelty rate, if any
 
     @staticmethod
     def _rate(pair):
@@ -56,6 +57,14 @@ class EffectModel:
             self.heat[gy, gx, 1] += 1.0
             if advanced:
                 self.adv_colors.add(col)
+            # Exploit-on-success: once a color has a proven track record of
+            # reaching novel states, it becomes the focus and breadth-seeking
+            # on other colors is damped (see priority()).
+            best, best_rate = None, 0.45
+            for c, p in self.color.items():
+                if p[1] >= 8 and p[0] / p[1] > best_rate:
+                    best, best_rate = c, p[0] / p[1]
+            self.focus_color = best
         else:
             pair = self.simple.setdefault(key, [1.0, 2.0])
             pair[0] += 1.0 if changed else 0.0
@@ -84,7 +93,10 @@ class EffectModel:
             pair = self.color.get(col, [1.0, 2.0])
             p = 0.5 * self._rate(pair)
             p += 0.5 * (self.heat[gy, gx, 0] / self.heat[gy, gx, 1])
-            p += 1.5 / (pair[1] ** 0.5)
+            bonus = 1.5 / (pair[1] ** 0.5)
+            if self.focus_color is not None and col != self.focus_color:
+                bonus *= 0.25
+            p += bonus
             if col in self.adv_colors:
                 p += 0.6
             p -= 0.4 * self.deadly_color.get(col, 0)
