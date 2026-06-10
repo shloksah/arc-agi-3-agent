@@ -252,21 +252,45 @@ Total Score = mean of all environment scores
 |------|------|--------|---------|-----------|-------|
 | 1 | SDK Setup & Basic Agent Loop | COMPLETE | 2026-06-07 | 2026-06-07 | arc-agi 0.9.8, GameRunner, ExplorerAgent, RHAE scoring |
 | 2 | Frame Parsing & State Representation | COMPLETE | 2026-06-07 | 2026-06-07 | FrameParser: objects, diffs, movement tracking. Tested on 10 games |
-| 3 | Advanced Graph Explorer | IN PROGRESS | 2026-06-09 | — | FrugalExplorer v2: effect model, frozen mask, frontier BFS w/ drift cooldown, death attribution, per-color segmentation, tiered click probing. 0.111% local (seeded/reproducible), 4 L0s solving — efficiency is the bottleneck now |
+| 3 | Advanced Graph Explorer | IN PROGRESS | 2026-06-09 | — | FrugalExplorer v3: novelty-based effect model, engine-UI hash mask (breakthrough: 0.111%→0.364%), frontier BFS, death attribution, per-color segmentation. Next: product-cycle sweep (lp85 L1), 19 games still unsolved |
 | 4 | CNN Online Learning | ABANDONED | 2026-06-09 | 2026-06-10 | Kernel v6 scored **0.05%** — worse than naive explorer (0.08%). Confirms research: CNN burns 200-300 actions/level learning, blows the 5x cutoff. Pivoted to training-free effect model |
 | 5 | Hybrid Integration | RESCOPED | — | — | New scope: explorer + effect model (done in Step 3); CNN dropped |
-| 6 | Scoring Meta-Strategy | NOT STARTED | — | — | Budget management, exploit-on-first-success, efficiency tuning |
+| 6 | Scoring Meta-Strategy | IN PROGRESS | 2026-06-10 | — | Done: exploit-on-success, per-game time/action budgets (kaggle agent). Todo: smarter budget allocation across levels |
 | 7 | Multi-Game Tuning | NOT STARTED | — | — | Per-game profiling and tuning |
-| 8 | Kaggle Submission | IN PROGRESS | 2026-06-07 | — | Best: 0.08% (v3 explorer, rank ~800). v6 CNN: 0.05%. Next submission: FrugalExplorer once local > 0.3%. Milestone #1: June 30 |
+| 8 | Kaggle Submission | IN PROGRESS | 2026-06-07 | — | Best scored: 0.08% (v3 explorer). v6 CNN: 0.05%. **v7 FrugalExplorer (local 0.34%) pushed 2026-06-10, needs UI "Submit to Competition" click, then ~9h rerun**. Milestone #1: June 30 |
 | 9 | Polish & Portfolio | IN PROGRESS | 2026-06-09 | — | GitHub repo live (private): github.com/shloksah/arc-agi-3-agent with README. Flip public + add MIT-0 license before June 30 for milestone eligibility |
 
-**Overall:** 2/9 steps complete | **Current:** 0.08% Kaggle / 0.111% local | **Target:** 0.65%+ (top 5)
+**Overall:** 2/9 steps complete | **Current:** 0.08% Kaggle (v7 @ 0.364% local pending) | **Target:** 0.65%+ (top 5)
 
 ---
 
 ## Development Log
 
-### 2026-06-10
+### 2026-06-10 (PM) — engine-UI mask breakthrough + Kaggle v7 submitted
+- **Novelty signal**: effect model now learns from "reached a novel state" instead of "changed
+  pixels" — in click-toggle games (r11l/vc33/tn36) every click repaints something, so
+  frame-change carried no information. vc33 L0: 309→156 actions.
+- **Exploit-on-success**: once a clicked color shows a proven novelty rate, exploration bonus on
+  other colors is damped 4x.
+- **Scoring math insight**: an in-cutoff-but-slow solve (e.g. 5x baseline on a weight-1 level)
+  is worth ~0.006% overall; a near-baseline L0 solve is worth ~0.11%; deeper levels carry
+  2-3x the weight. Priority = near-baseline solves + depth, not rescuing slow solves.
+- **lp85 L1 reverse-engineered**: 3-reel slot puzzle (rows rotate one symbol per button press;
+  win = markers coincide with goal sprites; ~12x12 conjunction, no partial feedback). Needs a
+  "product cycle sweep" (nested odometer over independent cyclic actions) — designed, not built.
+- **BREAKTHROUGH (found via lp85 source dive)**: arcengine's UI template draws a step counter
+  down column 0 + level pips on rows 0-1; they tick too slowly for volatility detection, so
+  identical play states hashed differently → state-graph explosion everywhere (m0r0's 343
+  nodes), broken cycle detection, frontier replay-thrash. Always masking the engine UI strip:
+  **local RHAE 0.111% → 0.364%** (tn36 L0 185→16 actions = 0.5x baseline super-human;
+  vc33 solves L0+L1, L1 at 1.6x).
+- **Kaggle v7 submitted**: `kaggle_agent.py` — self-contained FrugalExplorer port onto the
+  official Agent interface (own RESET handling, per-game 7min/4000-action budget, global 8h
+  bail, no torch → no GPU queue). Validated locally at 0.341% via `test_kaggle_agent.py`
+  (stubbed official harness; caught `action_data` interface quirks). Kernel v7 ran clean;
+  awaiting competition rerun score (~9h).
+
+### 2026-06-10 (AM)
 - **v6 CNN scored 0.05%** — worse than the v3 explorer (0.08%). CNN path confirmed dead; Step 4 closed.
 - Git history rewritten to sole authorship (Shlok Sah); commit routine updated.
 

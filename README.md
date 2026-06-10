@@ -57,16 +57,20 @@ Key design decisions, each tied to the scoring math:
 |-------|------------------------------|
 | Random baseline | 0.000% |
 | Naive graph explorer | 0.236% |
-| FrugalExplorer v1 | 0.143% (in active development) |
+| StochasticGoose CNN (1st-place preview approach) | 0.05% on Kaggle |
+| **FrugalExplorer v3** | **0.364%** |
 
-Current Kaggle leaderboard: 0.08% (earlier explorer version). For context, the
-live leaderboard leader is at 1.21% — the entire field is compressed under 1.3%,
-and every solved-within-budget level moves rank significantly.
+Current Kaggle leaderboard: 0.08% (earlier explorer version; v3 submission
+pending). For context, the live leaderboard leader is at 1.21% — the entire
+field is compressed under 1.3%, and every solved-within-budget level moves
+rank significantly. Highlights: two levels solved *faster than the human
+baseline* (tn36 L0 at 0.5x, lp85 L0 at 0.8x).
 
-Known v1 failure modes (diagnosed via the local harness, fixes in progress):
-volatile mid-board pixels exploding the state graph, tier-2 click candidates
-landing on background cells, and "changes pixels ≠ makes progress" tunnel vision
-in click-sequence games.
+The single biggest win came from reverse-engineering the engine's UI overlay:
+a step counter drawn down column 0 ticks every few actions — too slowly for
+volatility detection — so identical play states hashed differently, silently
+corrupting the state graph in every game. Masking the engine UI strip from
+hashes tripled the score in one change.
 
 ## Repo structure
 
