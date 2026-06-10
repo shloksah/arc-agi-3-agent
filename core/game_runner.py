@@ -121,15 +121,31 @@ class GameRunner:
                 break
 
             if frame_data.state == GameState.GAME_OVER:
-                result.levels.append(LevelResult(
-                    level=current_level,
-                    actions_taken=len(current_level_transitions),
-                    solved=False,
-                    transitions=current_level_transitions,
+                # The real environment allows RESET to retry the level, so a
+                # death is not terminal. Let the agent attribute the death to
+                # the action that caused it, then reset and keep playing.
+                if hasattr(agent, "on_game_over"):
+                    agent.on_game_over(current_level, current_level_transitions)
+                if step >= max_actions:
+                    break
+                frame_data = env.step(GameAction.RESET)
+                if frame_data is None:
+                    break
+                step += 1
+                curr_frame = frame_data._frame[0].copy()
+                current_level_transitions.append(Transition(
+                    step=step,
+                    action=GameAction.RESET,
+                    action_data=None,
+                    frame_before=prev_frame,
+                    frame_after=curr_frame,
+                    frame_changed=True,
+                    state_after=frame_data.state,
+                    levels_completed=frame_data.levels_completed,
+                    frame_hash=frame_hash(curr_frame),
                 ))
-                if self.verbose:
-                    print(f"  GAME OVER at level {current_level} after {step} total actions")
-                break
+                prev_frame = curr_frame
+                continue
 
             if frame_data.levels_completed > current_level:
                 result.levels.append(LevelResult(
@@ -172,6 +188,15 @@ class GameRunner:
             )
             current_level_transitions.append(t)
             prev_frame = curr_frame
+
+        # Budget exhausted mid-level: record the unfinished level
+        if frame_data is not None and frame_data.state != GameState.WIN and current_level_transitions:
+            result.levels.append(LevelResult(
+                level=current_level,
+                actions_taken=len(current_level_transitions),
+                solved=False,
+                transitions=current_level_transitions,
+            ))
 
         result.total_actions = step
         return result

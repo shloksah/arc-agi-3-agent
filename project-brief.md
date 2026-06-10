@@ -252,7 +252,7 @@ Total Score = mean of all environment scores
 |------|------|--------|---------|-----------|-------|
 | 1 | SDK Setup & Basic Agent Loop | COMPLETE | 2026-06-07 | 2026-06-07 | arc-agi 0.9.8, GameRunner, ExplorerAgent, RHAE scoring |
 | 2 | Frame Parsing & State Representation | COMPLETE | 2026-06-07 | 2026-06-07 | FrameParser: objects, diffs, movement tracking. Tested on 10 games |
-| 3 | Advanced Graph Explorer | NOT STARTED | — | — | Week 1 priority — upgrade to 3rd-place-level explorer |
+| 3 | Advanced Graph Explorer | IN PROGRESS | 2026-06-09 | — | FrugalExplorer v1: effect model, frozen mask, frontier BFS, death attribution. Local harness built (5s/sweep). 0.143% local vs 0.236% old explorer — 3 failure modes diagnosed, see runs/ |
 | 4 | CNN Online Learning | IN PROGRESS | 2026-06-09 | — | Adopted official StochasticGoose CNN notebook (kernel v6). GPU=T4, internet off. Submitted to leaderboard |
 | 5 | Hybrid Integration | NOT STARTED | — | — | Combine explorer + CNN |
 | 6 | Scoring Meta-Strategy | NOT STARTED | — | — | Budget management, L0-only fallback |

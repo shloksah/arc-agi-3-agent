@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from arcengine import GameAction
 from core.game_runner import GameRunner
 from core.explorer_agent import ExplorerAgent
+from core.frugal_explorer import FrugalExplorer
 
 RUNS_DIR = os.path.join(os.path.dirname(__file__), "runs")
 
@@ -53,6 +54,8 @@ def make_agent(name: str, max_actions: int):
         return RandomAgent()
     if name == "explorer":
         return ExplorerAgent(action_budget=max_actions)
+    if name == "frugal":
+        return FrugalExplorer(action_budget=max_actions)
     raise ValueError(f"Unknown agent: {name}")
 
 
@@ -63,7 +66,7 @@ def auto_action_cap(baseline_actions: list[int]) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description="Run agent across public games, score RHAE")
-    parser.add_argument("--agent", default="explorer", choices=["explorer", "random"])
+    parser.add_argument("--agent", default="frugal", choices=["frugal", "explorer", "random"])
     parser.add_argument("--games", default="", help="Comma-separated game-id prefixes (default: all)")
     parser.add_argument("--max-actions", type=int, default=0, help="Per-game action cap (0 = 5x baseline sum)")
     parser.add_argument("--no-save", action="store_true", help="Skip writing runs/ JSON")
