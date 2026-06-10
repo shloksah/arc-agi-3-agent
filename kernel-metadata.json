@@ -1,14 +1,21 @@
 {
   "id": "shloksah/arc-agi-3-explorer-agent",
-  "title": "ARC-AGI-3 Explorer Agent",
+  "title": "ARC-AGI-3 FrugalExplorer Agent",
   "code_file": "submission.ipynb",
   "language": "python",
   "kernel_type": "notebook",
   "is_private": true,
-  "enable_gpu": true,
+  "enable_gpu": false,
   "enable_internet": false,
-  "competition_sources": ["arc-prize-2026-arc-agi-3"],
-  "keywords": ["arc-agi-3", "exploration", "graph-search"],
+  "competition_sources": [
+    "arc-prize-2026-arc-agi-3"
+  ],
+  "keywords": [
+    "arc-agi-3",
+    "exploration",
+    "graph-search",
+    "go-explore"
+  ],
   "dataset_sources": [],
   "kernel_sources": []
 }
