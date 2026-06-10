@@ -70,6 +70,8 @@ def main():
     parser.add_argument("--games", default="", help="Comma-separated game-id prefixes (default: all)")
     parser.add_argument("--max-actions", type=int, default=0, help="Per-game action cap (0 = 5x baseline sum)")
     parser.add_argument("--no-save", action="store_true", help="Skip writing runs/ JSON")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="RNG seed (per-game) so runs are comparable")
     args = parser.parse_args()
 
     runner = GameRunner(verbose=False)
@@ -90,6 +92,7 @@ def main():
     t_start = time.time()
 
     for env_info in envs:
+        random.seed(f"{args.seed}-{env_info.game_id}")
         baselines = env_info.baseline_actions or []
         cap = args.max_actions or auto_action_cap(baselines)
         agent = make_agent(args.agent, cap)

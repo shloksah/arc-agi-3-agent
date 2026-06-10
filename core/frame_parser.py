@@ -128,35 +128,37 @@ class FrameParser:
         return int(values[np.argmax(counts)])
 
     def _find_objects(self, game_area: np.ndarray, bg_color: int) -> list[GameObject]:
-        binary = (game_area != bg_color).astype(np.int32)
-        labeled, num_features = ndimage.label(binary)
-
+        # Segment PER COLOR, not bg-vs-rest: a board region with embedded
+        # colored blocks would otherwise merge into one giant component and
+        # the blocks (often the interactive elements) would vanish as holes.
         objects = []
-        for i in range(1, num_features + 1):
-            component = (labeled == i)
-            pixels = np.argwhere(component)
-
-            if len(pixels) < self.min_object_area:
+        obj_id = 0
+        for color in np.unique(game_area):
+            if color == bg_color:
                 continue
+            labeled, num_features = ndimage.label(game_area == color)
+            for i in range(1, num_features + 1):
+                component = (labeled == i)
+                pixels = np.argwhere(component)
 
-            y_min, x_min = pixels.min(axis=0)
-            y_max, x_max = pixels.max(axis=0)
-            center_y = float(pixels[:, 0].mean())
-            center_x = float(pixels[:, 1].mean())
+                if len(pixels) < self.min_object_area:
+                    continue
 
-            colors_in_obj = game_area[component]
-            unique_colors, color_counts = np.unique(colors_in_obj, return_counts=True)
-            dominant_color = int(unique_colors[np.argmax(color_counts)])
+                y_min, x_min = pixels.min(axis=0)
+                y_max, x_max = pixels.max(axis=0)
+                center_y = float(pixels[:, 0].mean())
+                center_x = float(pixels[:, 1].mean())
 
-            objects.append(GameObject(
-                id=i,
-                bbox=(int(x_min), int(y_min), int(x_max), int(y_max)),
-                center=(center_x, center_y),
-                colors=[int(c) for c in unique_colors],
-                dominant_color=dominant_color,
-                area=len(pixels),
-                mask=component[y_min:y_max+1, x_min:x_max+1],
-            ))
+                obj_id += 1
+                objects.append(GameObject(
+                    id=obj_id,
+                    bbox=(int(x_min), int(y_min), int(x_max), int(y_max)),
+                    center=(center_x, center_y),
+                    colors=[int(color)],
+                    dominant_color=int(color),
+                    area=len(pixels),
+                    mask=component[y_min:y_max+1, x_min:x_max+1],
+                ))
 
         objects.sort(key=lambda o: (o.bbox[1], o.bbox[0]))
         return objects

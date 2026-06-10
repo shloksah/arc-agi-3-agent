@@ -35,9 +35,9 @@ from core.game_runner import Transition
 
 MASK_FREEZE_AFTER = 5     # transitions observed before the UI mask freezes
 VOLATILE_THRESHOLD = 0.8  # pixel changes in >= this fraction of steps -> UI
-MAX_CLICKS_PER_NODE = 16
+MAX_CLICKS_PER_NODE = 32
 VOLATILE_SENTINEL = 16    # colors are 0-15; masked pixels hash as 16
-MAX_TIER = 2
+MAX_TIER = 3
 
 
 @dataclass
@@ -89,6 +89,7 @@ class FrugalExplorer:
         self._last_frame = None
         self._undo_useless = False
         self._plan: deque = deque()   # (expected_hash, key) steps to frontier
+        self._replan_cooldown = 0     # suppress planning after plan drift
 
     # ── state hashing with frozen UI mask ───────────────────────────────
 
@@ -137,17 +138,20 @@ class FrugalExplorer:
     # ── candidate generation ─────────────────────────────────────────────
 
     def _click_candidates(self, frame: np.ndarray, tier: int) -> list:
-        """Tier 0: component centroids. Tier 1: object corner pixels.
-        Tier 2: coarse grid over the whole board (catches background-cell
-        games where nothing is segmentable)."""
+        """Tier 0: component centroids, deduped by (color, region).
+        Tier 1: object corner pixels.
+        Tier 2+: real non-background pixels, one per coarse cell, with a
+        different pixel choice each tier — interactive elements are colored
+        pixels, so precision sampling of them beats grid-center scans that
+        mostly land on background."""
         clicks = []
         seen = set()
 
-        def add(cx, cy):
+        def add(cx, cy, dedup_exact=False):
             cx, cy = max(0, min(63, cx)), max(0, min(63, cy))
-            cell = (int(frame[cy, cx]), cy // 8, cx // 8)
-            if cell not in seen:
-                seen.add(cell)
+            key = (cx, cy) if dedup_exact else (int(frame[cy, cx]), cy // 8, cx // 8)
+            if key not in seen:
+                seen.add(key)
                 clicks.append(("click", cx, cy))
 
         if tier == 0:
@@ -161,19 +165,30 @@ class FrugalExplorer:
                     cy = int(ys[len(ys) // 2]) + obj.bbox[1] + 1
                     cx = int(xs[len(xs) // 2]) + obj.bbox[0]
                 add(cx, cy)
-        elif tier == 1:
+            return clicks[:MAX_CLICKS_PER_NODE]
+
+        if tier == 1:
             state = self.parser.parse(frame)
             for obj in sorted(state.objects, key=lambda o: o.area):
                 x0, y0, x1, y1 = obj.bbox
                 for cx, cy in ((x0, y0 + 1), (x1, y1 + 1),
                                (x0, y1 + 1), (x1, y0 + 1)):
                     add(cx, cy)
-        else:
-            for cy in range(4, 64, 8):
-                for cx in range(4, 64, 8):
-                    add(cx, cy)
+            return clicks[:24]
 
-        return clicks[:MAX_CLICKS_PER_NODE if tier == 0 else 24]
+        # Tier 2+: one non-bg pixel per 8x8 cell; later tiers pick a
+        # different representative so repeated expansions reach new pixels
+        bg = frame[0, 0]
+        pick = tier - 2  # 0: first pixel in cell, 1: last, ...
+        for cy0 in range(0, 64, 8):
+            for cx0 in range(0, 64, 8):
+                cell = frame[cy0:cy0 + 8, cx0:cx0 + 8]
+                ys, xs = np.nonzero(cell != bg)
+                if len(ys) == 0:
+                    continue
+                i = min(pick * (len(ys) // 2 + 1), len(ys) - 1)
+                add(cx0 + int(xs[i]), cy0 + int(ys[i]), dedup_exact=True)
+        return clicks[:32]
 
     def _build_candidates(self, frame: np.ndarray, available: list[int],
                           tier: int = 0) -> list:
@@ -250,15 +265,21 @@ class FrugalExplorer:
                 self._plan.popleft()
                 key = planned_key
             else:
-                self._plan.clear()   # drifted off the known path: re-plan
+                # Drifted off the known path (animation, nondeterminism).
+                # Re-planning every step thrashes on big state spaces, so
+                # back off and explore locally for a few actions instead.
+                self._plan.clear()
+                self._replan_cooldown = 3
 
         if key is None:
             untested = self._untested(node)
             if not untested:
                 # Navigate to the nearest node that still has untested keys
-                if self._plan_to_frontier(h):
+                if self._replan_cooldown > 0:
+                    self._replan_cooldown -= 1
+                elif self._plan_to_frontier(h):
                     _, key = self._plan.popleft()
-                else:
+                if key is None:
                     # Whole known graph exhausted: deepen this node's tiers
                     if self._expand(node, frame, available_actions):
                         untested = self._untested(node)
@@ -274,11 +295,25 @@ class FrugalExplorer:
                     # frame before (movement chains need repetition)
                     changed = [k for k in node.candidates
                                if node.tested.get(k) and k not in self.deadly]
-                    pool = (changed
-                            or [k for k in node.candidates if k not in self.deadly]
-                            or node.candidates
-                            or [a for a in available_actions if a != 7])
-                    key = random.choice(pool)
+                    if changed:
+                        key = random.choice(changed)
+                    elif 6 in available_actions:
+                        # NOTHING here has ever changed the frame: re-clicking
+                        # tested-dead pixels is pure waste — probe a fresh
+                        # untested non-bg pixel instead
+                        bg = frame[0, 0]
+                        ys, xs = np.nonzero(frame != bg)
+                        if len(ys):
+                            i = random.randrange(len(ys))
+                            key = ("click", int(xs[i]), int(ys[i]))
+                        else:
+                            key = ("click", random.randrange(64),
+                                   random.randrange(64))
+                    else:
+                        pool = ([k for k in node.candidates if k not in self.deadly]
+                                or node.candidates
+                                or [a for a in available_actions if a != 7])
+                        key = random.choice(pool)
 
         self._last_key = key
         self._last_hash = h
