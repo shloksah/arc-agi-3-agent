@@ -90,18 +90,21 @@ class FrugalExplorer:
         self._undo_useless = False
         self._plan: deque = deque()   # (expected_hash, key) steps to frontier
         self._replan_cooldown = 0     # suppress planning after plan drift
+        self._visited = np.zeros((64, 64), dtype=bool)  # avatar ground coverage
 
     # ── state hashing with frozen UI mask ───────────────────────────────
 
     def _hash(self, frame: np.ndarray) -> str:
-        # arcengine's RenderableUserDisplay template draws a step counter
-        # down column 0 and level pips on row 1. Those pixels tick every few
-        # actions regardless of play — too slowly for volatility detection —
-        # and otherwise make identical play states hash differently (state
-        # explosion, broken cycle detection). Always exclude them.
+        # arcengine UI templates draw step counters / level pips along the
+        # board edges (col 0 in lp85, row 63 in tu93, row 1 pips). They tick
+        # every few actions regardless of play — too slowly for volatility
+        # detection — and otherwise make identical play states hash
+        # differently (state explosion, broken cycle detection). Always
+        # exclude the outer ring plus row 1.
         frame = frame.copy()
-        frame[:, 0] = VOLATILE_SENTINEL
+        frame[:, 0] = frame[:, 63] = VOLATILE_SENTINEL
         frame[0:2, :] = VOLATILE_SENTINEL
+        frame[63, :] = VOLATILE_SENTINEL
         if self.mask is not None:
             frame = np.where(self.mask, VOLATILE_SENTINEL, frame)
         return hashlib.md5(frame.tobytes()).hexdigest()[:12]
@@ -142,6 +145,8 @@ class FrugalExplorer:
         result_hash = self._hash(t.frame_after)
         novel = t.frame_changed and result_hash not in self.nodes
         self.effect.update(self._last_key, t.frame_before, novel)
+        self.effect.learn_move(self._last_key, t.frame_before, t.frame_after,
+                               int(t.frame_before[0, 0]))
         node = self.nodes.get(self._last_hash)
         if node is not None:
             node.tested[self._last_key] = t.frame_changed
@@ -258,6 +263,44 @@ class FrugalExplorer:
         self._plan = deque(reversed(steps))
         return True
 
+    # ── avatar navigation bias ───────────────────────────────────────────
+
+    def _avatar_pos(self, frame: np.ndarray):
+        col = self.effect.avatar_color
+        if col is None:
+            return None
+        ys, xs = np.nonzero(frame == col)
+        if len(ys) == 0 or len(ys) > 64:
+            return None
+        return float(ys.mean()), float(xs.mean())
+
+    def _nav_bonus(self, frame: np.ndarray):
+        """Bonus per movement action for stepping toward the nearest
+        unvisited non-background pixel. Turns random walks into directed
+        sweeps in avatar games while keeping graph fallback intact."""
+        if len(self.effect.moves) < 2:
+            return {}
+        pos = self._avatar_pos(frame)
+        if pos is None:
+            return {}
+        ay, ax = pos
+        self._visited[int(ay), int(ax)] = True
+        bg = frame[0, 0]
+        ys, xs = np.nonzero((frame != bg) & (frame != self.effect.avatar_color)
+                            & ~self._visited)
+        if len(ys) == 0:
+            return {}
+        d = np.abs(ys - ay) + np.abs(xs - ax)
+        i = int(d.argmin())
+        ty, tx = float(ys[i]), float(xs[i])
+        base = abs(ty - ay) + abs(tx - ax)
+        bonus = {}
+        for key, (dy, dx) in self.effect.moves.items():
+            new = abs(ty - (ay + dy)) + abs(tx - (ax + dx))
+            if new < base:
+                bonus[key] = 0.8
+        return bonus
+
     # ── action selection ─────────────────────────────────────────────────
 
     def select_action(self, frame, available_actions, history, levels_completed):
@@ -302,8 +345,10 @@ class FrugalExplorer:
                         key = 7
             if key is None:
                 if untested:
+                    nav = self._nav_bonus(frame)
                     key = max(untested,
-                              key=lambda k: self.effect.priority(k, frame))
+                              key=lambda k: self.effect.priority(k, frame)
+                              + nav.get(k, 0.0))
                 else:
                     # Fully exhausted: repeat something that changed the
                     # frame before (movement chains need repetition)

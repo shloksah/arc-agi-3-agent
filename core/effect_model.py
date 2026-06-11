@@ -32,6 +32,10 @@ class EffectModel:
         self.deadly_color = {}     # clicked color -> death count
         self.focus_color = None    # a color with proven novelty rate, if any
 
+        self.move_votes = {}       # action -> {(dy, dx): count}
+        self.moves = {}            # action -> confirmed (dy, dx)
+        self.avatar_color = None   # color of the sprite that movement shifts
+
     @staticmethod
     def _rate(pair):
         return pair[0] / pair[1]
@@ -71,6 +75,38 @@ class EffectModel:
             pair[1] += 1.0
             if advanced:
                 self.adv_keys.add(key)
+
+    def learn_move(self, key, before, after, bg):
+        """If a simple action translated a small sprite, vote for its
+        displacement. Tracks per-color centroids, so it works regardless of
+        what terrain the sprite moves over (trail-painting, colored floors).
+        Two consistent votes confirm the action as movement and identify
+        the avatar color. Purely advisory — it only shapes priorities, so a
+        wrong guess is never fatal."""
+        if isinstance(key, tuple):
+            return
+        if not (before != after).any():
+            return
+        # interior only: border rings are engine UI (counters/pips)
+        b, a = before[2:63, 1:63], after[2:63, 1:63]
+        for color in np.unique(b):
+            if color == bg:
+                continue
+            bys, bxs = np.nonzero(b == color)
+            if not (1 <= len(bys) <= 40):
+                continue
+            ays, axs = np.nonzero(a == color)
+            if len(ays) == 0 or abs(len(ays) - len(bys)) > len(bys) // 2 + 2:
+                continue
+            dy = int(round(ays.mean() - bys.mean()))
+            dx = int(round(axs.mean() - bxs.mean()))
+            if (dy == 0 and dx == 0) or abs(dy) > 10 or abs(dx) > 10:
+                continue
+            votes = self.move_votes.setdefault(key, {})
+            votes[(dy, dx, int(color))] = votes.get((dy, dx, int(color)), 0) + 1
+            if votes[(dy, dx, int(color))] >= 2:
+                self.moves[key] = (dy, dx)
+                self.avatar_color = int(color)
 
     def record_death(self, key, frame):
         if isinstance(key, tuple):
