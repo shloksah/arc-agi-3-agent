@@ -47,6 +47,9 @@ class EffectModel:
         self.deadly_simple = {}
         self.deadly_color = {}
         self.focus_color = None
+        self.move_votes = {}
+        self.moves = {}
+        self.avatar_color = None
 
     @staticmethod
     def _rate(pair):
@@ -90,6 +93,34 @@ class EffectModel:
             self.deadly_color[col] = self.deadly_color.get(col, 0) + 1
         else:
             self.deadly_simple[key] = self.deadly_simple.get(key, 0) + 1
+
+    def learn_move(self, key, before, after, bg):
+        """Per-color centroid tracking: a small sprite whose centroid
+        displaces consistently with an action is the avatar, regardless
+        of terrain (trails, colored floors)."""
+        if isinstance(key, tuple):
+            return
+        if not (before != after).any():
+            return
+        b, a = before[2:63, 1:63], after[2:63, 1:63]
+        for color in np.unique(b):
+            if color == bg:
+                continue
+            bys, bxs = np.nonzero(b == color)
+            if not (1 <= len(bys) <= 40):
+                continue
+            ays, axs = np.nonzero(a == color)
+            if len(ays) == 0 or abs(len(ays) - len(bys)) > len(bys) // 2 + 2:
+                continue
+            dy = int(round(ays.mean() - bys.mean()))
+            dx = int(round(axs.mean() - bxs.mean()))
+            if (dy == 0 and dx == 0) or abs(dy) > 10 or abs(dx) > 10:
+                continue
+            votes = self.move_votes.setdefault(key, {})
+            votes[(dy, dx, int(color))] = votes.get((dy, dx, int(color)), 0) + 1
+            if votes[(dy, dx, int(color))] >= 2:
+                self.moves[key] = (dy, dx)
+                self.avatar_color = int(color)
 
     def priority(self, key, frame):
         if isinstance(key, tuple):
@@ -174,6 +205,7 @@ class MyAgent(Agent):
         self._undo_useless = False
         self._plan = deque()
         self._replan_cooldown = 0
+        self._visited = np.zeros((64, 64), dtype=bool)
 
     # ── frame helpers ────────────────────────────────────────────────
 
@@ -194,12 +226,14 @@ class MyAgent(Agent):
         return out or [1, 2, 3, 4, 5, 6]
 
     def _hash(self, frame):
-        # arcengine UI template: step counter down column 0, level pips on
-        # rows 0-1 — they tick regardless of play and must never reach the
-        # state hash (state explosion / broken cycle detection otherwise).
+        # arcengine UI templates draw step counters / level pips along the
+        # board edges (col 0, row 63, row 1 — varies by game). They tick
+        # regardless of play and must never reach the state hash (state
+        # explosion / broken cycle detection otherwise). Mask the full ring.
         f = frame.copy()
-        f[:, 0] = VOLATILE_SENTINEL
+        f[:, 0] = f[:, 63] = VOLATILE_SENTINEL
         f[0:2, :] = VOLATILE_SENTINEL
+        f[63, :] = VOLATILE_SENTINEL
         if self.mask is not None:
             f = np.where(self.mask, VOLATILE_SENTINEL, f)
         return hashlib.md5(f.tobytes()).hexdigest()[:12]
@@ -309,6 +343,46 @@ class MyAgent(Agent):
         self._plan = deque(reversed(steps))
         return True
 
+    # ── avatar navigation bias ───────────────────────────────────────
+
+    def _avatar_pos(self, frame):
+        col = self.effect.avatar_color
+        if col is None:
+            return None
+        ys, xs = np.nonzero(frame == col)
+        if len(ys) == 0 or len(ys) > 64:
+            return None
+        return float(ys.mean()), float(xs.mean())
+
+    def _nav_bonus(self, frame):
+        if len(self.effect.moves) < 2:
+            return {}
+        pos = self._avatar_pos(frame)
+        if pos is None:
+            return {}
+        ay, ax = pos
+        self._visited[int(ay), int(ax)] = True
+        bg = frame[0, 0]
+        interior = frame[2:63, 1:63]
+        counts = np.bincount(interior.ravel(), minlength=17)
+        rare = [c for c in np.argsort(counts) if counts[c] > 0
+                and c != bg and c != self.effect.avatar_color][:3]
+        sel = np.isin(frame, rare) & ~self._visited
+        sel[:, 0] = sel[:, 63] = sel[0:2, :] = sel[63, :] = False
+        ys, xs = np.nonzero(sel)
+        if len(ys) == 0:
+            return {}
+        d = np.abs(ys - ay) + np.abs(xs - ax)
+        i = int(d.argmin())
+        ty, tx = float(ys[i]), float(xs[i])
+        base = abs(ty - ay) + abs(tx - ax)
+        bonus = {}
+        for key, (dy, dx) in self.effect.moves.items():
+            new = abs(ty - (ay + dy)) + abs(tx - (ax + dx))
+            if new < base:
+                bonus[key] = 0.8
+        return bonus
+
     # ── learning from the previous transition ────────────────────────
 
     def _learn(self, current_frame):
@@ -320,6 +394,7 @@ class MyAgent(Agent):
         result_hash = self._hash(after)
         novel = changed and result_hash not in self.nodes
         self.effect.update(self._last_key, before, novel)
+        self.effect.learn_move(self._last_key, before, after, int(before[0, 0]))
         node = self.nodes.get(self._last_hash)
         if node is not None:
             node.tested[self._last_key] = changed
@@ -415,8 +490,10 @@ class MyAgent(Agent):
                         key = 7
             if key is None:
                 if untested:
+                    nav = self._nav_bonus(frame)
                     key = max(untested,
-                              key=lambda k: self.effect.priority(k, frame))
+                              key=lambda k: self.effect.priority(k, frame)
+                              + nav.get(k, 0.0))
                 else:
                     changed = [k for k in node.candidates
                                if node.tested.get(k) and k not in self.deadly]

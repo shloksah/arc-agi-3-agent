@@ -286,8 +286,16 @@ class FrugalExplorer:
         ay, ax = pos
         self._visited[int(ay), int(ax)] = True
         bg = frame[0, 0]
-        ys, xs = np.nonzero((frame != bg) & (frame != self.effect.avatar_color)
-                            & ~self._visited)
+        # Steer toward RARE colors (goals, keys, exits are a few pixels;
+        # walls and floors are thousands) — nearest-any-pixel just pulls
+        # into adjacent walls forever.
+        interior = frame[2:63, 1:63]
+        counts = np.bincount(interior.ravel(), minlength=17)
+        rare = [c for c in np.argsort(counts) if counts[c] > 0
+                and c != bg and c != self.effect.avatar_color][:3]
+        sel = np.isin(frame, rare) & ~self._visited
+        sel[:, 0] = sel[:, 63] = sel[0:2, :] = sel[63, :] = False
+        ys, xs = np.nonzero(sel)
         if len(ys) == 0:
             return {}
         d = np.abs(ys - ay) + np.abs(xs - ax)
