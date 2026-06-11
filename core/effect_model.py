@@ -35,6 +35,8 @@ class EffectModel:
         self.move_votes = {}       # action -> {(dy, dx): count}
         self.moves = {}            # action -> confirmed (dy, dx)
         self.avatar_color = None   # color of the sprite that movement shifts
+        self.floor_votes = {}      # color -> times revealed under the avatar
+        self.floor_colors = set()  # colors the avatar can stand on
 
     @staticmethod
     def _rate(pair):
@@ -107,6 +109,12 @@ class EffectModel:
             if votes[(dy, dx, int(color))] >= 2:
                 self.moves[key] = (dy, dx)
                 self.avatar_color = int(color)
+                # Floor = what gets revealed where the avatar just was
+                vacated = (b == color) & (a != color)
+                for fc in np.unique(a[vacated]):
+                    self.floor_votes[int(fc)] = self.floor_votes.get(int(fc), 0) + 1
+                    if self.floor_votes[int(fc)] >= 2:
+                        self.floor_colors.add(int(fc))
 
     def record_death(self, key, frame):
         if isinstance(key, tuple):

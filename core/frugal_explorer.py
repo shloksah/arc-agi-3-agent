@@ -91,6 +91,10 @@ class FrugalExplorer:
         self._plan: deque = deque()   # (expected_hash, key) steps to frontier
         self._replan_cooldown = 0     # suppress planning after plan drift
         self._visited = np.zeros((64, 64), dtype=bool)  # avatar ground coverage
+        self._move_plan: deque = deque()   # action keys toward a nav target
+        self._move_target = None           # (y, x) we are walking toward
+        self._blocked: set = set()         # lattice cells where a move failed
+        self._nav_fail = 0                 # consecutive abandoned nav plans
 
     # ── state hashing with frozen UI mask ───────────────────────────────
 
@@ -263,6 +267,96 @@ class FrugalExplorer:
         self._plan = deque(reversed(steps))
         return True
 
+    # ── grid path planner ────────────────────────────────────────────────
+
+    def _nav_targets(self, frame: np.ndarray):
+        """Unvisited pixels of the rarest colors (goals/keys/exits are a
+        few pixels; walls and floors are thousands)."""
+        bg = frame[0, 0]
+        interior = frame[2:63, 1:63]
+        counts = np.bincount(interior.ravel(), minlength=17)
+        # absolute smallness, not relative: goals/keys are a few px;
+        # "3 rarest colors" in a maze can include the walls themselves
+        rare = [c for c in np.argsort(counts) if 0 < counts[c] <= 60
+                and c != bg and c != self.effect.avatar_color][:3]
+        sel = np.isin(frame, rare) & ~self._visited
+        sel[:, 0] = sel[:, 63] = sel[0:2, :] = sel[63, :] = False
+        return np.argwhere(sel)
+
+    def _plan_path(self, frame: np.ndarray) -> bool:
+        """BFS over the movement lattice (stride = learned displacement)
+        from the avatar to the nearest rare-color target, walking only
+        floor-colored cells. Fills _move_plan with action keys."""
+        if len(self.effect.moves) < 2 or not self.effect.floor_colors:
+            return False
+        pos = self._avatar_pos(frame)
+        if pos is None:
+            return False
+        targets = self._nav_targets(frame)
+        if len(targets) == 0:
+            return False
+        tset = {(int(y), int(x)) for y, x in targets}
+        passable = self.effect.floor_colors | {self.effect.avatar_color}
+
+        start = (int(round(pos[0])), int(round(pos[1])))
+        parents = {start: None}
+        queue = deque([start])
+        goal = None
+        steps = 0
+        while queue and steps < 4000:
+            cy, cx = queue.popleft()
+            steps += 1
+            if (cy, cx) in tset or any((cy + oy, cx + ox) in tset
+                                       for oy in (-1, 0, 1) for ox in (-1, 0, 1)):
+                goal = (cy, cx)
+                break
+            for key, (dy, dx) in self.effect.moves.items():
+                ny, nx = cy + dy, cx + dx
+                if not (2 <= ny <= 62 and 1 <= nx <= 62):
+                    continue
+                if (ny, nx) in parents or (ny, nx) in self._blocked:
+                    continue
+                if int(frame[ny, nx]) not in passable and (ny, nx) not in tset \
+                        and not any((ny + oy, nx + ox) in tset
+                                    for oy in (-1, 0, 1) for ox in (-1, 0, 1)):
+                    continue
+                parents[(ny, nx)] = ((cy, cx), key)
+                queue.append((ny, nx))
+        if goal is None or goal == start:
+            return False
+        keys = []
+        cur = goal
+        while parents[cur] is not None:
+            prev, key = parents[cur]
+            keys.append(key)
+            cur = prev
+        self._move_plan = deque(reversed(keys))
+        self._move_target = goal
+        return True
+
+    def _follow_move_plan(self, frame: np.ndarray, history: list):
+        """Pop the next nav step, abandoning the plan if the last step
+        failed (blocked) or the avatar vanished."""
+        if not self._move_plan:
+            return None
+        if history and self._last_key in self.effect.moves:
+            t = history[-1]
+            if t.action != GameAction.RESET and not t.frame_changed:
+                # the move was blocked: remember the cell and re-plan
+                pos = self._avatar_pos(frame)
+                if pos is not None:
+                    dy, dx = self.effect.moves[self._last_key]
+                    self._blocked.add((int(round(pos[0])) + dy,
+                                       int(round(pos[1])) + dx))
+                self._move_plan.clear()
+                self._move_target = None
+                self._nav_fail += 1
+                return None
+        if self._avatar_pos(frame) is None:
+            self._move_plan.clear()
+            return None
+        return self._move_plan.popleft()
+
     # ── avatar navigation bias ───────────────────────────────────────────
 
     def _avatar_pos(self, frame: np.ndarray):
@@ -335,6 +429,21 @@ class FrugalExplorer:
                 # back off and explore locally for a few actions instead.
                 self._plan.clear()
                 self._replan_cooldown = 3
+
+        # Grid navigation: in movement games, walk a planned path to the
+        # nearest rare-color target instead of testing actions cell by cell
+        if key is None:
+            nav_key = self._follow_move_plan(frame, history)
+            if nav_key is None and self._nav_fail < 12:
+                if self._plan_path(frame):
+                    nav_key = self._move_plan.popleft()
+            if nav_key is not None:
+                if not self._move_plan and self._move_target is not None:
+                    ty, tx = self._move_target
+                    self._visited[max(0, ty - 2):ty + 3,
+                                  max(0, tx - 2):tx + 3] = True
+                    self._move_target = None
+                key = nav_key
 
         if key is None:
             untested = self._untested(node)
