@@ -257,10 +257,10 @@ Total Score = mean of all environment scores
 | 5 | Hybrid Integration | RESCOPED | — | — | New scope: explorer + effect model (done in Step 3); CNN dropped |
 | 6 | Scoring Meta-Strategy | IN PROGRESS | 2026-06-10 | — | Done: exploit-on-success, per-game time/action budgets (kaggle agent). Todo: smarter budget allocation across levels |
 | 7 | Multi-Game Tuning | NOT STARTED | — | — | Per-game profiling and tuning |
-| 8 | Kaggle Submission | IN PROGRESS | 2026-06-07 | — | **v7 FrugalExplorer: 0.16% (rank 730/1131)** — 2x previous best. Local 0.34% → LB 0.16% (transfer ≈ 0.5x: semi-private games differ; generic breadth beats per-game tuning). Ladder: 0.30→rank 229, 0.40→56, 0.50→17, 0.65→top 5. Milestone #1: June 30 |
+| 8 | Kaggle Submission | IN PROGRESS | 2026-06-07 | — | **v8: 0.25% (rank 432/1144)**. Trajectory: 0.08 → 0.16 (v7) → 0.25 (v8). Transfer local→LB ≈ 0.6x. Ladder: 0.30→rank 232, 0.40→57, 0.50→17, 0.65→top 5. Milestone #1: June 30 |
 | 9 | Polish & Portfolio | IN PROGRESS | 2026-06-09 | — | GitHub repo live (private): github.com/shloksah/arc-agi-3-agent with README. Flip public + add MIT-0 license before June 30 for milestone eligibility |
 
-**Overall:** 2/9 steps complete | **Current:** 0.16% Kaggle (rank 730) / 0.364% local | **Target:** 0.65%+ (top 5)
+**Overall:** 2/9 steps complete | **Current:** 0.25% Kaggle (rank 432) / 0.404% local | **Target:** 0.65%+ (top 5)
 
 ---
 
