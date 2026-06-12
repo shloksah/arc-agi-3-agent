@@ -96,6 +96,8 @@ class FrugalExplorer:
         self._blocked: set = set()         # lattice cells where a move failed
         self._nav_fail = 0                 # consecutive abandoned nav plans
         self._nav_rounds = 0               # completed coverage sweeps
+        self._carry_color = None           # color of an item just consumed
+        self._target_color = None          # color of the current nav target
 
     # ── state hashing with frozen UI mask ───────────────────────────────
 
@@ -280,6 +282,10 @@ class FrugalExplorer:
         # "3 rarest colors" in a maze can include the walls themselves
         rare = [c for c in np.argsort(counts) if 0 < counts[c] <= 60
                 and c != bg and c != self.effect.avatar_color][:3]
+        # Carry-state: after consuming an item, head for DIFFERENT-colored
+        # zones (the drop point), not the next identical item
+        if self._carry_color is not None and len(rare) > 1:
+            rare = [c for c in rare if c != self._carry_color]
         sel = np.isin(frame, rare) & ~self._visited
         sel[:, 0] = sel[:, 63] = sel[0:2, :] = sel[63, :] = False
         return np.argwhere(sel)
@@ -333,6 +339,8 @@ class FrugalExplorer:
             cur = prev
         self._move_plan = deque(reversed(keys))
         self._move_target = goal
+        gy, gx = goal
+        self._target_color = int(frame[gy, gx])
         return True
 
     def _follow_move_plan(self, frame: np.ndarray, history: list):
@@ -452,6 +460,15 @@ class FrugalExplorer:
                     ty, tx = self._move_target
                     self._visited[max(0, ty - 2):ty + 3,
                                   max(0, tx - 2):tx + 3] = True
+                    # Pickup detection: the target's pixels are no longer
+                    # its color — we consumed an item; deliver elsewhere
+                    region = frame[max(0, ty - 2):ty + 3, max(0, tx - 2):tx + 3]
+                    if (self._target_color is not None
+                            and not (region == self._target_color).any()):
+                        self._carry_color = self._target_color
+                    elif (self._carry_color is not None
+                          and self._target_color != self._carry_color):
+                        self._carry_color = None   # delivered (or moved on)
                     self._move_target = None
                 key = nav_key
 
