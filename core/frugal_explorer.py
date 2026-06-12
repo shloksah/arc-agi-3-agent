@@ -95,6 +95,7 @@ class FrugalExplorer:
         self._move_target = None           # (y, x) we are walking toward
         self._blocked: set = set()         # lattice cells where a move failed
         self._nav_fail = 0                 # consecutive abandoned nav plans
+        self._nav_rounds = 0               # completed coverage sweeps
 
     # ── state hashing with frozen UI mask ───────────────────────────────
 
@@ -437,6 +438,15 @@ class FrugalExplorer:
             if nav_key is None and self._nav_fail < 12:
                 if self._plan_path(frame):
                     nav_key = self._move_plan.popleft()
+                elif (self._visited.any() and len(self.effect.moves) >= 2
+                      and self._nav_rounds < 6):
+                    # All targets visited but not won: carry/deliver games
+                    # need REVISITS (picked-up items vanish; drop zones must
+                    # be re-entered per item). Start a fresh coverage round.
+                    self._visited[:] = False
+                    self._nav_rounds += 1
+                    if self._plan_path(frame):
+                        nav_key = self._move_plan.popleft()
             if nav_key is not None:
                 if not self._move_plan and self._move_target is not None:
                     ty, tx = self._move_target

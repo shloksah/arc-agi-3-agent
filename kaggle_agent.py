@@ -50,6 +50,8 @@ class EffectModel:
         self.move_votes = {}
         self.moves = {}
         self.avatar_color = None
+        self.floor_votes = {}
+        self.floor_colors = set()
 
     @staticmethod
     def _rate(pair):
@@ -121,6 +123,11 @@ class EffectModel:
             if votes[(dy, dx, int(color))] >= 2:
                 self.moves[key] = (dy, dx)
                 self.avatar_color = int(color)
+                vacated = (b == color) & (a != color)
+                for fc in np.unique(a[vacated]):
+                    self.floor_votes[int(fc)] = self.floor_votes.get(int(fc), 0) + 1
+                    if self.floor_votes[int(fc)] >= 2:
+                        self.floor_colors.add(int(fc))
 
     def priority(self, key, frame):
         if isinstance(key, tuple):
@@ -206,6 +213,12 @@ class MyAgent(Agent):
         self._plan = deque()
         self._replan_cooldown = 0
         self._visited = np.zeros((64, 64), dtype=bool)
+        self._move_plan = deque()
+        self._move_target = None
+        self._blocked = set()
+        self._nav_fail = 0
+        self._nav_rounds = 0
+        self._changed_last = None
 
     # ── frame helpers ────────────────────────────────────────────────
 
@@ -354,6 +367,81 @@ class MyAgent(Agent):
             return None
         return float(ys.mean()), float(xs.mean())
 
+    def _nav_targets(self, frame):
+        bg = frame[0, 0]
+        interior = frame[2:63, 1:63]
+        counts = np.bincount(interior.ravel(), minlength=17)
+        rare = [c for c in np.argsort(counts) if 0 < counts[c] <= 60
+                and c != bg and c != self.effect.avatar_color][:3]
+        sel = np.isin(frame, rare) & ~self._visited
+        sel[:, 0] = sel[:, 63] = sel[0:2, :] = sel[63, :] = False
+        return np.argwhere(sel)
+
+    def _plan_path(self, frame):
+        if len(self.effect.moves) < 2 or not self.effect.floor_colors:
+            return False
+        pos = self._avatar_pos(frame)
+        if pos is None:
+            return False
+        targets = self._nav_targets(frame)
+        if len(targets) == 0:
+            return False
+        tset = {(int(y), int(x)) for y, x in targets}
+        passable = self.effect.floor_colors | {self.effect.avatar_color}
+        start = (int(round(pos[0])), int(round(pos[1])))
+        parents = {start: None}
+        queue = deque([start])
+        goal = None
+        steps = 0
+        while queue and steps < 4000:
+            cy, cx = queue.popleft()
+            steps += 1
+            if (cy, cx) in tset or any((cy + oy, cx + ox) in tset
+                                       for oy in (-1, 0, 1) for ox in (-1, 0, 1)):
+                goal = (cy, cx)
+                break
+            for key, (dy, dx) in self.effect.moves.items():
+                ny, nx = cy + dy, cx + dx
+                if not (2 <= ny <= 62 and 1 <= nx <= 62):
+                    continue
+                if (ny, nx) in parents or (ny, nx) in self._blocked:
+                    continue
+                if int(frame[ny, nx]) not in passable and (ny, nx) not in tset \
+                        and not any((ny + oy, nx + ox) in tset
+                                    for oy in (-1, 0, 1) for ox in (-1, 0, 1)):
+                    continue
+                parents[(ny, nx)] = ((cy, cx), key)
+                queue.append((ny, nx))
+        if goal is None or goal == start:
+            return False
+        keys = []
+        cur = goal
+        while parents[cur] is not None:
+            prev, key = parents[cur]
+            keys.append(key)
+            cur = prev
+        self._move_plan = deque(reversed(keys))
+        self._move_target = goal
+        return True
+
+    def _follow_move_plan(self, frame, changed_last):
+        if not self._move_plan:
+            return None
+        if self._last_key in self.effect.moves and changed_last is False:
+            pos = self._avatar_pos(frame)
+            if pos is not None:
+                dy, dx = self.effect.moves[self._last_key]
+                self._blocked.add((int(round(pos[0])) + dy,
+                                   int(round(pos[1])) + dx))
+            self._move_plan.clear()
+            self._move_target = None
+            self._nav_fail += 1
+            return None
+        if self._avatar_pos(frame) is None:
+            self._move_plan.clear()
+            return None
+        return self._move_plan.popleft()
+
     def _nav_bonus(self, frame):
         if len(self.effect.moves) < 2:
             return {}
@@ -362,16 +450,10 @@ class MyAgent(Agent):
             return {}
         ay, ax = pos
         self._visited[int(ay), int(ax)] = True
-        bg = frame[0, 0]
-        interior = frame[2:63, 1:63]
-        counts = np.bincount(interior.ravel(), minlength=17)
-        rare = [c for c in np.argsort(counts) if counts[c] > 0
-                and c != bg and c != self.effect.avatar_color][:3]
-        sel = np.isin(frame, rare) & ~self._visited
-        sel[:, 0] = sel[:, 63] = sel[0:2, :] = sel[63, :] = False
-        ys, xs = np.nonzero(sel)
-        if len(ys) == 0:
+        targets = self._nav_targets(frame)
+        if len(targets) == 0:
             return {}
+        ys, xs = targets[:, 0], targets[:, 1]
         d = np.abs(ys - ay) + np.abs(xs - ax)
         i = int(d.argmin())
         ty, tx = float(ys[i]), float(xs[i])
@@ -393,6 +475,7 @@ class MyAgent(Agent):
         changed = not np.array_equal(before, after)
         result_hash = self._hash(after)
         novel = changed and result_hash not in self.nodes
+        self._changed_last = changed
         self.effect.update(self._last_key, before, novel)
         self.effect.learn_move(self._last_key, before, after, int(before[0, 0]))
         node = self.nodes.get(self._last_hash)
@@ -474,6 +557,27 @@ class MyAgent(Agent):
             else:
                 self._plan.clear()
                 self._replan_cooldown = 3
+
+        # Grid navigation: walk planned paths to rare-color targets in
+        # movement games; restart coverage rounds for carry/deliver loops
+        if key is None:
+            nav_key = self._follow_move_plan(frame, self._changed_last)
+            if nav_key is None and self._nav_fail < 12:
+                if self._plan_path(frame):
+                    nav_key = self._move_plan.popleft()
+                elif (self._visited.any() and len(self.effect.moves) >= 2
+                      and self._nav_rounds < 6):
+                    self._visited[:] = False
+                    self._nav_rounds += 1
+                    if self._plan_path(frame):
+                        nav_key = self._move_plan.popleft()
+            if nav_key is not None:
+                if not self._move_plan and self._move_target is not None:
+                    ty, tx = self._move_target
+                    self._visited[max(0, ty - 2):ty + 3,
+                                  max(0, tx - 2):tx + 3] = True
+                    self._move_target = None
+                key = nav_key
 
         if key is None:
             untested = self._untested(node)
