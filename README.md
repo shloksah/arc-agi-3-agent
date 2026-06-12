@@ -105,3 +105,9 @@ tracked across agent versions.
 
 Active development for ARC Prize 2026 Milestone 1 (June 30, 2026). See
 `project-brief.md` for the research log, competitive analysis, and build plan.
+
+## License
+
+[MIT-0](LICENSE) (MIT No Attribution), per ARC Prize 2026 open-source
+requirements. Game sources under `environment_files/` are MIT-licensed by the
+ARC Prize Foundation and retain their original notices.
