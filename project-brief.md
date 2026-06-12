@@ -258,7 +258,7 @@ Total Score = mean of all environment scores
 | 6 | Scoring Meta-Strategy | IN PROGRESS | 2026-06-10 | — | Done: exploit-on-success, per-game time/action budgets (kaggle agent). Todo: smarter budget allocation across levels |
 | 7 | Multi-Game Tuning | NOT STARTED | — | — | Per-game profiling and tuning |
 | 8 | Kaggle Submission | IN PROGRESS | 2026-06-07 | — | **v8: 0.25% (rank 432/1144)**. Trajectory: 0.08 → 0.16 (v7) → 0.25 (v8). Transfer local→LB ≈ 0.6x. Ladder: 0.30→rank 232, 0.40→57, 0.50→17, 0.65→top 5. Milestone #1: June 30 |
-| 9 | Polish & Portfolio | IN PROGRESS | 2026-06-09 | — | GitHub repo live (private): github.com/shloksah/arc-agi-3-agent with README. Flip public + add MIT-0 license before June 30 for milestone eligibility |
+| 9 | Polish & Portfolio | IN PROGRESS | 2026-06-09 | — | **Repo PUBLIC with MIT-0** (2026-06-11): github.com/shloksah/arc-agi-3-agent — milestone open-source requirement met. Remaining: also make the Kaggle notebook public before June 30; demo/blog post |
 
 **Overall:** 2/9 steps complete | **Current:** 0.25% Kaggle (rank 432) / 0.404% local | **Target:** 0.65%+ (top 5)
 
