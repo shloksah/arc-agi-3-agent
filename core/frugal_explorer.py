@@ -77,6 +77,10 @@ class FrugalExplorer:
         self._last_key = None
         self._last_hash = None
         self._plan.clear()
+        # death invalidates odometer position (reset rewinds the reels)
+        if getattr(self, "_odo_phase", None) in ("measure", "sweep"):
+            self._odo_phase = "done"
+            self._odo_queue.clear()
 
     def _reset_level_state(self):
         self.nodes: dict[str, Node] = {}
@@ -98,6 +102,15 @@ class FrugalExplorer:
         self._nav_rounds = 0               # completed coverage sweeps
         self._carry_color = None           # color of an item just consumed
         self._target_color = None          # color of the current nav target
+        self._key_regions = {}             # click key -> interior diff bbox
+        self._key_presses = {}             # click key -> (changes, presses)
+        self._odo_phase = None             # None|'measure'|'sweep'|'done'
+        self._odo_groups = []              # [(rep_key, bbox)] disjoint cyclers
+        self._odo_periods = []             # measured cycle period per group
+        self._odo_seen = set()             # hashes during current measurement
+        self._odo_idx = 0                  # group being measured
+        self._odo_queue: deque = deque()   # static sweep press sequence
+        self._level_actions = 0
 
     # ── state hashing with frozen UI mask ───────────────────────────────
 
@@ -160,6 +173,22 @@ class FrugalExplorer:
             node.edges[self._last_key] = result_hash
         if self._last_key == 7 and not t.frame_changed:
             self._undo_useless = True
+        # Track interior change regions per click key (border excluded —
+        # step counters tick there on every action and would make every
+        # key's region overlap every other's)
+        if isinstance(self._last_key, tuple):
+            ch, pr = self._key_presses.get(self._last_key, (0, 0))
+            self._key_presses[self._last_key] = (ch + bool(t.frame_changed), pr + 1)
+            if t.frame_changed:
+                d = (t.frame_before != t.frame_after)[2:63, 1:63]
+                ys, xs = np.nonzero(d)
+                if len(ys):
+                    bb = (int(ys.min()), int(xs.min()), int(ys.max()), int(xs.max()))
+                    old = self._key_regions.get(self._last_key)
+                    if old:
+                        bb = (min(old[0], bb[0]), min(old[1], bb[1]),
+                              max(old[2], bb[2]), max(old[3], bb[3]))
+                    self._key_regions[self._last_key] = bb
 
     # ── candidate generation ─────────────────────────────────────────────
 
@@ -366,6 +395,100 @@ class FrugalExplorer:
             return None
         return self._move_plan.popleft()
 
+    # ── product-cycle sweep (odometer) ───────────────────────────────────
+    # Games like lp85: several independent cyclic mechanisms (reels with
+    # rotate buttons) whose win is a CONJUNCTION of alignments with no
+    # partial feedback. Graph exploration pays replay overhead per state;
+    # the odometer enumerates the product space optimally: spin the inner
+    # reel through its full cycle, advance the next reel one step, repeat.
+
+    @staticmethod
+    def _bbox_overlap(a, b):
+        return not (a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1])
+
+    def _odo_candidate_groups(self):
+        """Disjoint groups of always-changing click keys, one rep each."""
+        keys = [k for k, (ch, pr) in self._key_presses.items()
+                if pr >= 3 and ch == pr and k in self._key_regions
+                and k not in self.deadly]
+        keys.sort(key=lambda k: -self._key_presses[k][1])
+        groups = []
+        for k in keys:
+            bb = self._key_regions[k]
+            for i, (rep, gbb) in enumerate(groups):
+                if self._bbox_overlap(bb, gbb):
+                    groups[i] = (rep, (min(gbb[0], bb[0]), min(gbb[1], bb[1]),
+                                       max(gbb[2], bb[2]), max(gbb[3], bb[3])))
+                    break
+            else:
+                groups.append((k, bb))
+        # merged groups can have grown to overlap each other: keep only
+        # mutually disjoint reps, preferring the most-pressed
+        out = []
+        for rep, bb in groups:
+            if all(not self._bbox_overlap(bb, obb) for _, obb in out):
+                out.append((rep, bb))
+        return out
+
+    def _odo_step(self, h: str):
+        """Drive the odometer state machine; returns a key or None."""
+        if self._odo_phase == 'measure':
+            if h in self._odo_seen:
+                # cycle closed for this group
+                self._odo_periods.append(len(self._odo_seen))
+                self._odo_idx += 1
+                if self._odo_idx >= len(self._odo_groups):
+                    return self._odo_build_sweep()
+                self._odo_seen = {h}
+                return self._odo_groups[self._odo_idx][0]
+            if len(self._odo_seen) > 30:
+                self._odo_phase = 'done'   # not actually cyclic
+                return None
+            self._odo_seen.add(h)
+            return self._odo_groups[self._odo_idx][0]
+
+        if self._odo_phase == 'sweep':
+            if self._odo_queue:
+                return self._odo_queue.popleft()
+            self._odo_phase = 'done'
+        return None
+
+    def _odo_build_sweep(self):
+        order = sorted(range(len(self._odo_groups)),
+                       key=lambda i: self._odo_periods[i])
+        keys = [self._odo_groups[i][0] for i in order]
+        periods = [self._odo_periods[i] for i in order]
+        total = 1
+        for p in periods:
+            total *= p
+        seq = []
+        cap = min(total, 1600)
+        for idx in range(1, cap + 1):
+            seq.append(keys[0])
+            stride = periods[0]
+            for lvl in range(1, len(keys)):
+                if idx % stride == 0:
+                    seq.append(keys[lvl])
+                stride *= periods[lvl]
+        self._odo_queue = deque(seq)
+        self._odo_phase = 'sweep'
+        return self._odo_queue.popleft() if self._odo_queue else None
+
+    def _odo_maybe_start(self, h: str):
+        if self._odo_phase is not None or self._level_actions < 120:
+            return None
+        if self.effect.moves:           # movement games: not reel puzzles
+            return None
+        groups = self._odo_candidate_groups()
+        if len(groups) < 2:
+            return None
+        self._odo_groups = groups[:3]
+        self._odo_periods = []
+        self._odo_idx = 0
+        self._odo_seen = {h}
+        self._odo_phase = 'measure'
+        return self._odo_groups[0][0]
+
     # ── avatar navigation bias ───────────────────────────────────────────
 
     def _avatar_pos(self, frame: np.ndarray):
@@ -423,8 +546,19 @@ class FrugalExplorer:
             node = Node(candidates=self._build_candidates(frame, available_actions))
             self.nodes[h] = node
         node.visits += 1
+        self._level_actions += 1
 
         key = None
+
+        # Product-cycle sweep: enumerate independent cyclic mechanisms
+        if self._odo_phase in ('measure', 'sweep'):
+            if (history and isinstance(self._last_key, tuple)
+                    and not history[-1].frame_changed):
+                self._odo_phase = 'done'   # a press stopped working: abort
+            else:
+                key = self._odo_step(h)
+        if key is None and self._odo_phase is None:
+            key = self._odo_maybe_start(h)
 
         # Follow an active plan while reality matches it
         if self._plan:

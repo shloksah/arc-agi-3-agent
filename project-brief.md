@@ -252,7 +252,7 @@ Total Score = mean of all environment scores
 |------|------|--------|---------|-----------|-------|
 | 1 | SDK Setup & Basic Agent Loop | COMPLETE | 2026-06-07 | 2026-06-07 | arc-agi 0.9.8, GameRunner, ExplorerAgent, RHAE scoring |
 | 2 | Frame Parsing & State Representation | COMPLETE | 2026-06-07 | 2026-06-07 | FrameParser: objects, diffs, movement tracking. Tested on 10 games |
-| 3 | Advanced Graph Explorer | IN PROGRESS | 2026-06-09 | — | FrugalExplorer v3: novelty-based effect model, engine-UI hash mask (breakthrough: 0.111%→0.364%), frontier BFS, death attribution, per-color segmentation. Next: product-cycle sweep (lp85 L1), 19 games still unsolved |
+| 3 | Advanced Graph Explorer | IN PROGRESS | 2026-06-09 | — | FrugalExplorer v4: + grid path planner, carry-state, product-cycle sweep (WIP — detects reels but not yet winning lp85 L1, see dev log 06-12). Engine-UI mask was the big win (0.111%→0.364%). 0.404% local |
 | 4 | CNN Online Learning | ABANDONED | 2026-06-09 | 2026-06-10 | Kernel v6 scored **0.05%** — worse than naive explorer (0.08%). Confirms research: CNN burns 200-300 actions/level learning, blows the 5x cutoff. Pivoted to training-free effect model |
 | 5 | Hybrid Integration | RESCOPED | — | — | New scope: explorer + effect model (done in Step 3); CNN dropped |
 | 6 | Scoring Meta-Strategy | IN PROGRESS | 2026-06-10 | — | Done: exploit-on-success, per-game time/action budgets (kaggle agent). Todo: smarter budget allocation across levels |
@@ -265,6 +265,39 @@ Total Score = mean of all environment scores
 ---
 
 ## Development Log
+
+### 2026-06-12 — product-cycle sweep (odometer) IN PROGRESS, not yet converting
+- **Built carry-state awareness** (committed): after consuming a nav target (its pixels vanish),
+  steer toward different-colored zones (deliver leg) instead of the next identical item. Inert
+  outside movement+pickup games. wa30 turned out to be a live multi-agent game (autonomous
+  creatures move items every turn) — parked as out of scope for generic heuristics.
+- **Built product-cycle sweep / "odometer"** (`core/frugal_explorer.py`, WIP — committed but NOT
+  yet solving lp85 L1):
+  - Tracks per-click-key interior change regions + press/change counts.
+  - `_odo_candidate_groups`: groups always-changing click keys into disjoint bbox clusters
+    (one rep each) = independent cyclic mechanisms.
+  - State machine: `measure` (press each group's rep until its state hash repeats → cycle
+    period) → `sweep` (statically enumerate the product space: spin inner reel full cycle,
+    advance next reel one step, repeat) → `done`.
+  - Guards: only starts after 120 actions, skipped in movement games, aborts on death/no-op,
+    sweep capped at 1600 presses.
+- **Current blocker (where to resume):** on lp85 L1 the odometer detects **2 groups, periods
+  [10, 10]**, sweeps 100 combos, but does NOT win. Earlier manual reverse-engineering (see
+  "lp85 L1" notes) found **3 reels** (rows A y16-19, B y25-28, C y34-37), each with a left
+  (color 8) and right (color 14) rotate button. Likely causes to investigate next:
+  1. **Only 2 of 3 reels detected** — the change regions span the full row width (x17-45), so
+     two adjacent rows' bboxes overlap and get merged into one group. Fix: cluster by the
+     BUTTON location / the reel's row band, not the full repaint bbox; or segment change
+     regions into connected components instead of one bounding box.
+  2. Win may need each reel at a specific offset that the inner-full-cycle ordering reaches,
+     but with a reel missing the conjunction can never complete.
+  3. Verify period=10 is real (lp85 L1 reels showed ~12 symbols in manual probing — 10 vs 12
+     mismatch suggests the measurement hash is catching the wrong region or a partial cycle).
+  - Debug entry point: `_odo_candidate_groups` and `_key_regions` in frugal_explorer.py; the
+    diagnostic one-liner that prints groups/regions/periods is in shell history.
+- Local RHAE steady at **0.404%** (odometer is additive/inert; no regression). Kaggle still v9
+  @ 0.25 (rank ~441). **No new submission** — holding until odometer converts a win.
+- **NOTE: Fable 5 model access ends June 22.** Milestone #1 deadline June 30.
 
 ### 2026-06-10 (PM) — engine-UI mask breakthrough + Kaggle v7 submitted
 - **Novelty signal**: effect model now learns from "reached a novel state" instead of "changed
